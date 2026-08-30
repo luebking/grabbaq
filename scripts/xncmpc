@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# runs ncmpcpp in a dedicated terminal resp. activate or hides that
+# takes a remote mpd --host as optional parameter
+
+BACKDROP=$HOME/.local/share/backdrops/music.png
+# The qterm functions are also to be found in https://github.com/luebking/grabbaq/tree/main/scripts and critical for this to function
+QTERM_FUNCS=$HOME/.bin/.funcs/qterm
+FONT="Monofur Nerd Font" # look more casual :)
+
+### HANDS OFF ###########################################
+
+# no, this calculates and identifier for the parameter (host)
+# that will be a dbus-permissable token
+if (( ${#@} > 0 )); then
+    HASH=$(md5sum <<< "$*")
+    HASH="_${HASH%% *}"
+fi
+
+qdbus6 org.lxqt.QTerminal-sngltn /windows/mpd${HASH} activateOrHide >/dev/null 2>&1 && exit
+
+#TITLE="♫·♫♪♩♩" # MPC
+TITLE="󰲸 MPD" # MPC
+for PA in "$@"; do
+    if [[ ! -z $NHOST ]]; then
+        TITLE="$TITLE : $PA"
+        break
+    fi
+    if [[ "$PA" = "--host" ]]; then
+        NHOST=true
+    fi
+done
+
+if [[ -z $NHOST ]]; then
+    ! pidof mpd && mpd & disown %1
+    mpc status
+fi
+
+
+. "$QTERM_FUNCS"
+qterm1_assertWindow "mpd${HASH}" "ncmpcpp $@" "" 112 32 "$FONT" 11 || exit 1
+qterm1_daytimeScheme "mpd${HASH}"
+qdbus6 org.lxqt.QTerminal-sngltn /tabs/mpd${HASH} setLabel "$TITLE"
+qdbus6 org.lxqt.QTerminal-sngltn /terminals/mpd${HASH} setBackgroundImage $BACKDROP 3

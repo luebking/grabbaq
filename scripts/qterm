@@ -1,0 +1,59 @@
+#!/bin/sh
+#set -x
+qterm1_newWindow() {
+    NEW_SNGLTN=false
+    if ! qdbus6 org.lxqt.QTerminal-sngltn > /dev/null 2>&1; then
+        NEW_SNGLTN=true
+        qterminal -i sngltn & disown
+        for ((i=0;i<10;++i)); do
+            qdbus6 org.lxqt.QTerminal-sngltn > /dev/null 2>&1 && break
+            sleep 0.5
+        done
+        if ! qdbus6 org.lxqt.QTerminal-sngltn > /dev/null 2>&1; then
+            echo "FAILED to create singleton qterminal!"
+            return 1
+        fi
+    fi
+    qdbus6 org.lxqt.QTerminal-sngltn / newWindow "$1" "$2" "$3" $4 $5
+    qdbus6 org.lxqt.QTerminal-sngltn /terminals/$1 setFont "$6" $7
+    qdbus6 org.lxqt.QTerminal-sngltn /terminals/$1 setSize $4 $5
+    $NEW_SNGLTN && qdbus6 org.lxqt.QTerminal-sngltn /windows/sngltn closeWindow
+    return 0
+}
+
+qterm1_assertWindow() {
+    ret=0
+    qdbus6 org.lxqt.QTerminal-sngltn /windows/$1 > /dev/null 2>&1 ||  \
+    if ! qterm1_newWindow "$@"; then
+        qiq notify "Failed to create $1 window" >/dev/null
+        return 1
+    fi
+    return 0
+}
+
+qterm1_daytimeScheme() {
+    SCHEME=arch-night
+    value=`LC_ALL=C redshift -op 2>/dev/null | sed '/Color temperature/!d; s/Color temperature: \([0-9]*\)K/\1/'`
+    (($value > 5500)) && SCHEME=arch-day
+    qdbus6 org.lxqt.QTerminal-sngltn /terminals/$1 setColorScheme $SCHEME
+}
+
+qterm_daytimeScheme() {
+    SCHEME=arch-night
+    case $1 in
+    d|day|bright)
+        SCHEME=arch-day
+        ;;
+    n|night|dark)
+        SCHEME=arch-night
+        ;;
+    *)
+        value=`LC_ALL=C redshift -op 2>/dev/null | sed '/Color temperature/!d; s/Color temperature: \([0-9]*\)K/\1/'`
+        (($value > 5500)) && SCHEME=arch-day
+        ;;
+    esac
+    if [[ $TERM =~ "tmux"* ]]; then
+        eval $(tmux show-environment | grep QTERM_DBUS_)
+    fi
+    qdbus6 $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT setColorScheme $SCHEME
+}

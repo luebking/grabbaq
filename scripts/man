@@ -1,0 +1,86 @@
+#!/bin/bash
+
+
+# The script will try to find a local manpage and if that doesn't exist to fetch one from the archlinux online pages
+# The latter is locally cached to limit traffic and speed up subsequent requests
+# It will detect when run from qiq and pipe the output there, if you want an extra window, run "!man foo"
+
+BACKDROP="$HOME/.local/share/backdrops/light.png"
+CACHEDIR=/tmp/.man.cache
+# The qterm functions are also to be found in https://github.com/luebking/grabbaq/tree/main/scripts and critical for this to function
+QTERM_FUNCS=$HOME/.bin/.funcs/qterm
+
+#### HANDS OFF #########################################
+
+export GROFF_TMPDIR=/tmp
+cd /tmp # GROFF_TMPDIR seems ignored, this is however irrelevant unless you intend to render into html
+#curl -sL "https://man.archlinux.org/man/$1.raw" | groff -t -Thtml -mandoc
+
+TTY="$(tty)"
+
+if [[ "$1" == "NEW_WINDOW" ]]; then
+    TTY=""
+    shift
+fi
+
+REQ="${1/\(*\)/\.1}"
+REQ="${REQ#man:}"
+echo $REQ
+
+MANPAGE="$(find /usr/share/man/man* /usr/local/share/man/man* -name "$REQ"'.[0-9]*' 2>/dev/null | head -n1)"
+if [[ -z $MANPAGE ]]; then # maybe user provided full page name
+    MANPAGE="$(find /usr/share/man/man* /usr/local/share/man/man* -name "$REQ"'.gz' 2>/dev/null | head -n1)"
+fi
+CAT=zcat
+#echo $MANPAGE; [[ -z $MANPAGE ]] && echo "need curl"
+if [[ -z $MANPAGE ]]; then
+    CAT=cat
+    mkdir -p "$CACHEDIR"
+    MANPAGE="$CACHEDIR/$REQ.raw"
+    [[ -e "$MANPAGE" ]] || curl -sL "https://man.archlinux.org/man/$REQ.raw" > "$MANPAGE" || echo "Error: could not fetch man page"
+    if file -ib "$MANPAGE" | grep -q html; then
+        echo "Error: page $1 does not exist even online"
+        # don't delete so we won't download the same error file again
+        exit 1
+    fi
+fi
+[[ -e "$MANPAGE" ]] || exit 1
+
+
+exec 2>/dev/null  # suppress groff warnings nobody understands anyway
+
+#qiq notify "$TTY"
+if [[ "$TTY" = "/dev/pts/"* ]]; then
+    export GROFF_NO_SGR=1
+#    unset GROFF_NO_SGR
+    read ROWS COLS < <(stty -F "$TTY" size)
+    $CAT "$MANPAGE" | groff -t -Tutf8 -rLL=${COLS}n -rLT=${COLS}n -mtty-char -mandoc | less -R -Ps"manual\: $@ \| %dm"
+#        sed $'s|\e\\[1m|\e[1;32m|g; s|\e\\[2\(.\)m|\e[39;2\1m|g; s|\e\\[4m|\e[1;34m|g' | less -R -Ps"manual\: $@ \| %dm"
+    exit
+fi
+
+#qiq notify "$(realpath /proc/$PPID/exe)"
+if [[ "$(realpath /proc/$PPID/exe)" == *qiq* ]]; then
+    unset GROFF_NO_SGR
+    COLS=100
+    $CAT "$MANPAGE" | groff -t -Tutf8 -rLL=${COLS}n -rLT=${COLS}n -mtty-char -mandoc |
+        perl -pe 's|\x1b\[1m|\x1b\[1;32m|g; s|\x1b\[4m|\x1b\[1;34m|g; s|\x1b\[2(.)m|\x1b[39;2\1m|g; s|\x1b]8;;[^\x1b]*\x1b\\(.*?)\x1b]8;;\x1b\\|\1|g'
+                #                               colors are back, baby! =)                           #OSC-8 urls, ansifilter can't handle those at all
+        # sed cannot match non-greedy :(
+#        sed 's|\x1b\]8;;[^\x1b]*\x1b\\\(.*\?\)\x1b\]8;;\x1b\\|\1|g;'$'s|\e\\[1m|\e[1;32m|g; s|\e\\[2\(.\)m|\e[39;2\1m|g; s|\e\\[4m|\e[1;34m|g'
+    exit
+fi
+
+. "$QTERM_FUNCS"
+qterm1_assertWindow "man" "sleep 2" "" 100 48 || exit 1
+HASH=$(md5sum <<< "$*")
+HASH=${HASH%% *}
+if ! qdbus6 org.lxqt.QTerminal-sngltn /tabs/$HASH  > /dev/null 2>&1; then
+    qdbus6 org.lxqt.QTerminal-sngltn /windows/man newTab "$HASH" "$0 $@" ""
+    qdbus6 org.lxqt.QTerminal-sngltn /tabs/$HASH setLabel "$*"
+    qterm1_daytimeScheme "$HASH"
+    qdbus6 org.lxqt.QTerminal-sngltn /terminals/$HASH setBackgroundImage "$BACKDROP" 8
+else
+    qdbus6 org.lxqt.QTerminal-sngltn /tabs/$HASH activateTab
+    qdbus6 org.lxqt.QTerminal-sngltn /windows/man activateWindow
+fi
