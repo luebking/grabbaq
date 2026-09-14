@@ -19,16 +19,16 @@ forq() {
     # easter egg :) #######################################################################################
     if [[ "$1" == "bomb" ]]; then
         printf "\n\e[33;40m\e[0K
-              \e[1;31m◉\e[0;33;40m
-       I'm sorry, Dave.
-  I'm afraid I can't do that.
+              \e[1;31m◉\e[0;33;40m\e[0K
+       I'm sorry, Dave.\e[0K
+  I'm afraid I can't do that.\e[0K
 \e[0m\n\n"
         return false
     fi
     #######################################################################################################
 
     # nb. that this is NOT the same as $$ which will be our parenting shell even on self-calling this function as fork
-    # note to self, -d " " causes TTOU…
+    # note to self, -d " " causes TTOU (or TTIN?)
     local this_pid && read this_pid junk </proc/self/stat
 
     # management #########################################################################################
@@ -37,21 +37,25 @@ forq() {
         local what=$2
         [[ -n $what ]] && (( $what == $this_pid )) && unset what # in case the user issues the main PID as parameter
         if [[ -z $what ]]; then
-            # return the output to avoid the forqed of processes running into stdout errors
+            # return the output to avoid the forq'd off processes running into stdout errors
             # todo: figure a way to do this for forq'd of processes instead of the main shell
-            exec 1>$(tty)
-            exec 2>$(tty)
-            unset qterm_forq_pty
+            exec 1>${TTY}
+            exec 2>${TTY}
+            unset qterm_forq_out
+            unset qterm_forq_err
         else
             if [[ "$1" == "kill" ]]; then
                 pkill -P $what
             elif [[ -d /proc/$what ]]; then
-                printf "\e[1;31mPID $2 seems still running, closing the pty will cause errors\nUse forq kill $2 to kill it\e[0m\n" >&2
+                printf "\e[1;31mPID $2 seems still running, closing the pty might cause it to error\nUse forq kill $2 to kill it\e[0m\n" >&2
                 return false
             fi
         fi
         $QDBUS $QTERM_DBUS_SERVICE /terminals/${what:-$this_pid}_stdout closeTerminal >/dev/null 2>&1
         local RET=$?
+        $QDBUS $QTERM_DBUS_SERVICE /terminals/${what:-$this_pid}_stderr closeTerminal >/dev/null 2>&1
+        local RET2=$?
+        ((RET != 0)) && RET=$RET2
         ((RET != 0)) && printf "\e[1;31mThere's no pty for PID ${what:-$this_pid}\nTry 'forq list'\e[0m\n" >&2
         # … and re-activate the one currently in use
         $QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT activateTerminal
@@ -66,7 +70,7 @@ forq() {
                 [[ -e /proc/$pid/cmdline ]] && read cmdline < /proc/$pid/cmdline
                 printf "${current}${pid}\t ${cmdline}\n" >&2
             # todo: replace sed with shell parsing
-            done < <($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_stdout/\1/p')
+            done < <($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_std\(out\|err\)/\1/p')
             return true
         ;;
 
@@ -75,8 +79,8 @@ forq() {
                 # todo: this does not work, the subshell is blocked by the process we forked off and doesn't handle signals
                 kill -SIGUSR1 $2
             else
-                exec 1>$(tty)
-                exec 2>$(tty)
+                exec 1>${TTY}
+                exec 2>${TTY}
             fi
             return true
             ;;
@@ -85,9 +89,9 @@ forq() {
             if [[ -n "$2" ]]; then
                 # todo: see above… :(
                 kill -SIGUSR2 $2
-            elif [[ -n "${qterm_forq_pty}" ]]; then
-                exec 1>${qterm_forq_pty}
-                exec 2>${qterm_forq_pty}
+            elif [[ -n "${qterm_forq_out}" ]]; then
+                exec 1>${qterm_forq_out}
+                exec 2>${qterm_forq_err}
                 return true
             else
                 printf "\e[31mI'm sorry, I don't know where to go.\e[0m\n"
@@ -99,8 +103,6 @@ forq() {
     esac
 
     #######################################################################################################
-
-    local dbus_id=${this_pid}_stdout
 
     # "job" is our internal command, otherwise figure what the user wants #################################
     if [[ "$1" != "job" ]]; then
@@ -142,27 +144,35 @@ Try to not close a terminal with a running job.\n'
     #######################################################################################################
 
     # make a new terminal. "__qterm_canvas" is a special command that will create a passive, output-only terminal
+    local dbus_id
+    local stdPty
     local stdoPty
+    local stdePty
+    $stdout && dbus_id=${this_pid}_stdout || dbus_id=${this_pid}_stderr
+
     case "$direction" in
     "aside")
-        stdoPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitHorizontal $dbus_id "__qterm_canvas" "$PWD" 50)
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitHorizontal $dbus_id "__qterm_canvas" "$PWD" 50)
         ;;
     "below")
-        stdoPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitVertical $dbus_id "__qterm_canvas" "$PWD" 75)
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitVertical $dbus_id "__qterm_canvas" "$PWD" 75)
         ;;
     "tab")
-        stdoPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT newTab $dbus_id "__qterm_canvas" "$PWD")
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT newTab $dbus_id "__qterm_canvas" "$PWD")
         ;;
     "win"|"window")
-        stdoPty=$($QDBUS $QTERM_DBUS_SERVICE / newWindow $dbus_id __qterm_canvas "$PWD" "" "")
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE / newWindow $dbus_id __qterm_canvas "$PWD" "" "")
         ;;
     "off")
-        [[ -z $qterm_forq_pty ]] && printf '\e[1;31mThere seems no main redirection to use?\e[0m\n' && return false
-        stdoPty=$qterm_forq_pty
+        [[ -z $qterm_forq_out ]] && printf '\e[1;31mThere seems no main redirection to use?\e[0m\n' && return false
+        stdoPty=$qterm_forq_out
+        stdePty=$qterm_forq_err
         ;;
     *)
         ;;
     esac
+
+    $stdout && stdoPty=$stdPty || stdePty=$stdPty
 
     # … and re-activate the one the user can still type into
     $QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT activateTerminal
@@ -171,16 +181,19 @@ Try to not close a terminal with a running job.\n'
     if [[ "$1" == "job" ]]; then
     # we also need to actually run what the user wanted
         shift
+        if [[ -z $stdePty ]]; then
+            $stderr && stdePty=$stdPty || stdePty=$($QDBUS $QTERM_DBUS_SERVICE /terminals/${dbus_id} splitVertical ${this_pid}_stderr "__qterm_canvas" "$PWD" 25)
+        fi
 
     # the commented stuff is failed attempts at signal handling :(
-#        trap "echo foo >&2; tty; exec 1>$(tty); exec 2>$(tty)" USR1
+#        trap "echo foo >&2; tty; exec 1>${TTY}; exec 2>${TTY}" USR1
 #        trap "$stdout && exec 1>${stdoPty}; $stderr && exec 2>${stdoPty}" USR2
 #        trap "echo SOS" PIPE
         # The idea was to auto-foreground jobs if they want something, but
         # 1. seems not possible, 2. is probably too invasive anyway
 #        setopt monitor
-#        trap "fg $this_pid" TTOU
-#        trap "fg $this_pid" TTIN
+#        trap "echo TTOU >&2" TTOU
+#        trap "echo TTIN >&2" TTIN
         # this allows ctrl+z to re-background jobs (eg. after fg them to provide sudo input) w/o implicitly stopping them
         trap '' TSTP
 
@@ -191,20 +204,26 @@ Try to not close a terminal with a running job.\n'
 
 
         [[ "$direction" == "tab" ]] && $QDBUS $QTERM_DBUS_SERVICE /tabs/$dbus_id setLabel "$this_pid $@"
-        $stdout && exec 1>${stdoPty};  $stderr && exec 2>${stdoPty}
+        $stdout && [[ -n $stdoPty ]] && exec 1>${stdoPty}
+        [[ -n $stdePty ]] && exec 2>${stdePty}
 
 #        (
+            # pipe this through a pointless tee to contain EIO of the child processes
+            # todo: maybe tee into a tmpfile so the user can check the job output ex post?
+            # probablem is that the job won't understand that it's writing to a PTY, breaks eg. colors
+#            eval "$@" | tee --output-error=warn /dev/null
             eval "$@"
             local ret=$?
             if (( $? == 127)); then # 127 == failed to start
-                $QDBUS $QTERM_DBUS_SERVICE /terminals/$dbus_id closeTerminal
+                $QDBUS $QTERM_DBUS_SERVICE /terminals/${this_pid}_stdout closeTerminal > /dev/null 2>&1
+                $QDBUS $QTERM_DBUS_SERVICE /terminals/${this_pid}_stderr closeTerminal > /dev/null 2>&1
                 $QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT activateTerminal
             else
                 local smiley="(:"
                 (($ret != 0)) && smiley="):"
                 [[ "$direction" == "tab" ]] && $QDBUS $QTERM_DBUS_SERVICE /tabs/$dbus_id setLabel "$smiley $this_pid $@"
                 # todo, bell doesn't seem handled
-                printf '\a' >&2; sleep 0.5; printf '\a' >&2 # dun-dun
+                printf '\a' >${TTY}; sleep 0.5; printf '\a' >${TTY} # dun-dun
             fi
 #            echo $ret > $fifo
 #        ) &
@@ -214,9 +233,10 @@ Try to not close a terminal with a running job.\n'
         echo $result >&2
     else
     # otherwise redirect the main shell and record that in a global variable for pause/resume
-        qterm_forq_pty=${stdoPty}
-        $stdout && exec 1>${stdoPty}
-        $stderr && exec 2>${stdoPty}
+        qterm_forq_out=${stdoPty}
+        qterm_forq_err=${stdePty:-$TTY}
+        $stdout && [[ -n $stdoPty ]] && exec 1>${stdoPty}
+        $stderr && [[ -n $stdePty ]] && exec 2>${stdePty}
     fi
 }
 
@@ -227,7 +247,7 @@ _forq() {
         "kill"|"close")
             local QDBUS=$(command -v qdbus)
             [[ -z "$QDBUS" ]] && QDBUS=$(command -v qdbus6)
-            local JOBS=($($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_stdout/\1/p'))
+            local JOBS=($($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_std\(out\|err\)/\1/p'))
             compadd "${JOBS[@]}"
             return
         ;;
