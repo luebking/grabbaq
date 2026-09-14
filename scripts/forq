@@ -106,9 +106,10 @@ forq() {
 
     # "job" is our internal command, otherwise figure what the user wants #################################
     if [[ "$1" != "job" ]]; then
-        local direction="below"
-        local stdout=true
-        local stderr=false
+        local direction=${FORQ_WHERE:-below}
+        local qterm_cmd="__qterm_canvas"
+        local stdout
+        local stderr
         while (( $# > 0 )); do
             case "$1" in
                 "help")
@@ -124,6 +125,7 @@ Try to not close a terminal with a running job.\n'
                 return 1
                 ;;
                 "aside"|"below"|"tab"|"win"|"window"|"off") direction="$1" ;;
+                "paged") qterm_cmd="less -R -B -f -" ;;
                 1) stdout=true; stderr=false ;;
                 2) stdout=false; stderr=true ;;
                 3|"1+2") stdout=true; stderr=true ;;
@@ -137,11 +139,22 @@ Try to not close a terminal with a running job.\n'
     # if the user tries "forq someprogram" fork that off here and return, the subshell will perform the relevant action
     # this allows us to use the PID as dbus ID for the subterminal
     if (( $# > 0 )) && [[ "$1" != "job" ]]; then
+        if [[ -z $stdout ]]; then
+            local redir=${FORQ_JOB_REDIRECT:-3}
+            ((redir & 1)) && stdout=true || stdout=false
+            ((redir & 2)) && stderr=true || stderr=false
+        fi
+
 #        setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR
         forq job ${@} &
         return true
     fi
     #######################################################################################################
+    if [[ -z $stdout ]] && (( $# == 0 )) && ; then
+        local redir=${FORQ_REDIRECT:-1}
+        ((redir & 1)) && stdout=true || stdout=false
+        ((redir & 2)) && stderr=true || stderr=false
+    fi
 
     # make a new terminal. "__qterm_canvas" is a special command that will create a passive, output-only terminal
     local dbus_id
@@ -152,16 +165,16 @@ Try to not close a terminal with a running job.\n'
 
     case "$direction" in
     "aside")
-        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitHorizontal $dbus_id "__qterm_canvas" "$PWD" 50)
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitHorizontal $dbus_id "$qterm_cmd" "$PWD" 50)
         ;;
     "below")
-        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitVertical $dbus_id "__qterm_canvas" "$PWD" 75)
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitVertical $dbus_id "$qterm_cmd" "$PWD" 75)
         ;;
     "tab")
-        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT newTab $dbus_id "__qterm_canvas" "$PWD")
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT newTab $dbus_id "$qterm_cmd" "$PWD")
         ;;
     "win"|"window")
-        stdPty=$($QDBUS $QTERM_DBUS_SERVICE / newWindow $dbus_id __qterm_canvas "$PWD" "" "")
+        stdPty=$($QDBUS $QTERM_DBUS_SERVICE / newWindow $dbus_id "$qterm_cmd" "$PWD" "" "")
         ;;
     "off")
         [[ -z $qterm_forq_out ]] && printf '\e[1;31mThere seems no main redirection to use?\e[0m\n' && return false
@@ -169,6 +182,8 @@ Try to not close a terminal with a running job.\n'
         stdePty=$qterm_forq_err
         ;;
     *)
+        printf "\e[1;31mI don't know where $direction is…\e[0m\n"
+        return false
         ;;
     esac
 
@@ -182,7 +197,17 @@ Try to not close a terminal with a running job.\n'
     # we also need to actually run what the user wanted
         shift
         if [[ -z $stdePty ]]; then
-            $stderr && stdePty=$stdPty || stdePty=$($QDBUS $QTERM_DBUS_SERVICE /terminals/${dbus_id} splitVertical ${this_pid}_stderr "__qterm_canvas" "$PWD" 25)
+            if $stderr; then
+                stdePty=$stdPty
+            else
+                local SPLIT=splitVertical
+                local PRECENT=25
+                if [[ "$direction" == "below" ]]; then
+                    SPLIT=splitHorizontal
+                    PRECENT=50
+                fi
+                stdePty=$($QDBUS $QTERM_DBUS_SERVICE /terminals/${dbus_id} $SPLIT ${this_pid}_stderr "$qterm_cmd" "$PWD" $PRECENT)
+            fi
         fi
 
     # the commented stuff is failed attempts at signal handling :(
