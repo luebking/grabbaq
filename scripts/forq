@@ -266,6 +266,7 @@ Try to not close a terminal with a running job.\n'
         echo $result >&2
     else
     # otherwise redirect the main shell and record that in a global variable for pause/resume
+        $stderr && [[ -z $stdePty ]] && stdePty=$stdoPty
         qterm_forq_out=${stdoPty}
         qterm_forq_err=${stdePty:-$TTY}
         $stdout && [[ -n $stdoPty ]] && exec 1>${stdoPty}
