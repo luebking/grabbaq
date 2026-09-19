@@ -163,6 +163,11 @@ Try to not close a terminal with a running job.\n'
     local stdePty
     $stdout && dbus_id=${this_pid}_stdout || dbus_id=${this_pid}_stderr
 
+    if $QDBUS $QTERM_DBUS_SERVICE | grep -q "/terminals/${this_pid}_"; then
+        printf "\e[1;31mYou already have a terminal for ${this_pid}\e[0m\n"
+        return 1
+    fi
+
     case "$direction" in
     "aside")
         stdPty=$($QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT splitHorizontal $dbus_id "$qterm_cmd" "$PWD" 50)
