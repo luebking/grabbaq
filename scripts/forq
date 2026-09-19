@@ -4,13 +4,13 @@ forq() {
     # todo: maybe work away from sed
     if [[ -z "$QTERM_DBUS_SERVICE" ]]; then
         printf '\e[1;31mThis does not seem to be qterminal.\nRefusing action.\nGood bye.\e[0m\n'
-        return false
+        return 1
     fi
     local QDBUS=$(command -v qdbus)
     [[ -z "$QDBUS" ]] && QDBUS=$(command -v qdbus6)
     if [[ -z "$QDBUS" ]]; then
         printf '\e[1;31mCannot find qdbus or qdbus6\nGood bye.\e[0m\n'
-        return false
+        return 1
     fi
     if ! command -v sed >/dev/null 2>&1; then
         printf '\e[1;33mCannot find sed\n"forq list" will not work.\e[0m\n'
@@ -23,7 +23,7 @@ forq() {
        I'm sorry, Dave.\e[0K
   I'm afraid I can't do that.\e[0K
 \e[0m\n\n"
-        return false
+        return 1
     fi
     #######################################################################################################
 
@@ -48,7 +48,7 @@ forq() {
                 pkill -P $what
             elif [[ -d /proc/$what ]]; then
                 printf "\e[1;31mPID $2 seems still running, closing the pty might cause it to error\nUse forq kill $2 to kill it\e[0m\n" >&2
-                return false
+                return 1
             fi
         fi
         $QDBUS $QTERM_DBUS_SERVICE /terminals/${what:-$this_pid}_stdout closeTerminal >/dev/null 2>&1
@@ -71,7 +71,7 @@ forq() {
                 printf "${current}${pid}\t ${cmdline}\n" >&2
             # todo: replace sed with shell parsing
             done < <($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_std\(out\|err\)/\1/p')
-            return true
+            return 0
         ;;
 
         "pause")
@@ -82,7 +82,7 @@ forq() {
                 exec 1>${TTY}
                 exec 2>${TTY}
             fi
-            return true
+            return 0
             ;;
 
         "resume")
@@ -92,10 +92,10 @@ forq() {
             elif [[ -n "${qterm_forq_out}" ]]; then
                 exec 1>${qterm_forq_out}
                 exec 2>${qterm_forq_err}
-                return true
+                return 0
             else
                 printf "\e[31mI'm sorry, I don't know where to go.\e[0m\n"
-                return false
+                return 1
             fi
             ;;
         *)
@@ -147,10 +147,10 @@ Try to not close a terminal with a running job.\n'
 
 #        setopt LOCAL_OPTIONS NO_NOTIFY NO_MONITOR
         forq job ${@} &
-        return true
+        return 0
     fi
     #######################################################################################################
-    if [[ -z $stdout ]] && (( $# == 0 )) && ; then
+    if [[ -z $stdout ]] && (( $# == 0 )); then
         local redir=${FORQ_REDIRECT:-1}
         ((redir & 1)) && stdout=true || stdout=false
         ((redir & 2)) && stderr=true || stderr=false
@@ -177,13 +177,14 @@ Try to not close a terminal with a running job.\n'
         stdPty=$($QDBUS $QTERM_DBUS_SERVICE / newWindow $dbus_id "$qterm_cmd" "$PWD" "" "")
         ;;
     "off")
-        [[ -z $qterm_forq_out ]] && printf '\e[1;31mThere seems no main redirection to use?\e[0m\n' && return false
+        [[ -z $qterm_forq_out ]] && printf '\e[1;31mThere seems no main redirection to use?\e[0m\n' && return 1
         stdoPty=$qterm_forq_out
         stdePty=$qterm_forq_err
+        [[ -n "$stdoPty" ]] && stdPty=$stdoPty || stdPty=s$tdePty
         ;;
     *)
         printf "\e[1;31mI don't know where $direction is…\e[0m\n"
-        return false
+        return 1
         ;;
     esac
 
@@ -192,6 +193,8 @@ Try to not close a terminal with a running job.\n'
     # … and re-activate the one the user can still type into
     $QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT activateTerminal
     #######################################################################################################
+
+    [[ -z "$TTY" ]] && TTY=$(tty) # bash doesn't set that global variable
 
     if [[ "$1" == "job" ]]; then
     # we also need to actually run what the user wanted
@@ -239,7 +242,7 @@ Try to not close a terminal with a running job.\n'
 #            eval "$@" | tee --output-error=warn /dev/null
             eval "$@"
             local ret=$?
-            if (( $? == 127)); then # 127 == failed to start
+            if (( $ret == 127)); then # 127 == failed to start
                 $QDBUS $QTERM_DBUS_SERVICE /terminals/${this_pid}_stdout closeTerminal > /dev/null 2>&1
                 $QDBUS $QTERM_DBUS_SERVICE /terminals/${this_pid}_stderr closeTerminal > /dev/null 2>&1
                 $QDBUS $QTERM_DBUS_SERVICE $QTERM_DBUS_OBJECT activateTerminal
@@ -267,6 +270,7 @@ Try to not close a terminal with a running job.\n'
 
 # autocompletion ######################################################################################################
 
+if [[ -n "$ZSH_VERSION" ]]; then
 _forq() {
     case "${words[2]}" in
         "kill"|"close")
@@ -279,9 +283,30 @@ _forq() {
         *)
         ;;
     esac
-    local ACTIONS=("aside" "below" "tab" "win" "window" "list" "close" "kill" "help" "pause" "resume" "1" "2" "1+2" "off")
-    compadd "${ACTIONS[@]}"
+    local COMPREPLY=("aside" "below" "tab" "win" "window" "list" "close" "kill" "help" "pause" "resume" "1" "2" "1+2" "off")
+    compadd "${COMPREPLY[@]}"
     return
 }
+compdef _forq forq
+fi
 
-[[ -n "$ZSH_VERSION" ]] && compdef _forq forq
+if [[ -n "$BASH_VERSION" ]]; then
+_forq() {
+case "${COMP_WORDS[1]}" in
+        "kill"|"close")
+            local QDBUS=$(command -v qdbus)
+            [[ -z "$QDBUS" ]] && QDBUS=$(command -v qdbus6)
+            COMPREPLY=($($QDBUS $QTERM_DBUS_SERVICE | sed -n 's/\/terminals\/\([0-9]*\)_std\(out\|err\)/\1/p'))
+            return 0
+        ;;
+        *)
+        ;;
+    esac
+    COMPREPLY=($(compgen -W "aside below tab win window list close kill help pause resume 1 2 1+2 off" -- ${COMP_WORDS[$COMP_CWORD]}))
+    return 0
+}
+complete -F _forq forq
+complete -F _forq 4q
+fi
+
+alias 4q=forq
