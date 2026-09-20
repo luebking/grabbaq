@@ -11,6 +11,10 @@ mc() {
     command mc >${TTY} 2>&1 "$@"
 }
 
+vim() {
+    command vim >${TTY} 2>&1 "$@"
+}
+
 ## the working horse
 
 forq() {
