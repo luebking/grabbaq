@@ -1,4 +1,18 @@
 #!/bin/zsh
+
+## overrides for processes that fon't like being redirected and you probably don't want to
+
+
+less() {
+    command less >${TTY} 2>&1 "$@"
+}
+
+mc() {
+    command mc >${TTY} 2>&1 "$@"
+}
+
+## the working horse
+
 forq() {
     # Sanity checks, is this qterminal, do we have qdbus and sed? #########################################
     # todo: maybe work away from sed
@@ -43,6 +57,8 @@ forq() {
             exec 2>${TTY}
             unset qterm_forq_out
             unset qterm_forq_err
+            [[ -z "$UN4Q_PAGER" ]] || PAGER="$UN4Q_PAGER"
+            [[ -z "$UN4Q_GIT_PAGER" ]] || GIT_PAGER="$UN4Q_GIT_PAGER"
         else
             if [[ "$1" == "kill" ]]; then
                 pkill -P $what
@@ -271,6 +287,12 @@ Try to not close a terminal with a running job.\n'
         qterm_forq_err=${stdePty:-$TTY}
         $stdout && [[ -n $stdoPty ]] && exec 1>${stdoPty}
         $stderr && [[ -n $stdePty ]] && exec 2>${stdePty}
+        [[ -n "$PAGER" ]] && UN4Q_PAGER="$PAGER"
+        PAGER="${PAGER:-less} >${TTY} 2>&1"
+        if [[ -n "$GIT_PAGER" ]]; then
+            UN4Q_GIT_PAGER="$GIT_PAGER"
+            GIT_PAGER="$GIT_PAGER >${TTY} 2>&1"
+        fi
     fi
 }
 
